@@ -17,49 +17,58 @@ const getWeekday = (dateString) => {
   };  
 
   router.get('/available', async (req, res) => {
-    const { name, date } = req.query;
+    const { name, date, occupation } = req.query;
   
-    if (!name || !date) {
-      return res.status(400).json({ error: 'Name and date are required' });
+    if (!date || !occupation) {
+      return res.status(400).json({ error: 'Date and occupation are required' });
     }
   
     // 1. Get availability
-    const { data: availability, error: availError } = await supabase
+    const query = supabase
       .from('availability')
       .select('*')
-      .ilike('person_name', name)
-      .single();
+      .eq('occupation', occupation);
+  
+    if (name) {
+      query.ilike('person_name', name);
+    }
+  
+    const { data: availability, error: availError } = await query;
   
     if (availError) return res.status(500).json({ error: availError.message });
-
-    if (!availability) {
-        return res.status(404).json({ error: `No availability found for this person: ${name}` });
-      }
-    
+  
+    if (!availability || availability.length === 0) {
+      return res.status(404).json({ error: `No availability found for this occupation: ${occupation}` });
+    }
+  
     const weekday = getWeekday(date);
-
-    const timeSlots = availability.time_slots;
+    const availablePeople = [];
   
-    // 2. Get already booked time slots
-    const { data: bookings, error: bookingError } = await supabase
-      .from('bookings')
-      .select('time_slot')
-      .eq('person_name', name)
-      .eq('date', date);
+    for (const person of availability) {
+      if (!person.days.includes(weekday)) continue;
   
-    if (bookingError) return res.status(500).json({ error: bookingError.message });
+      // 2. Get already booked time slots
+      const { data: bookings, error: bookingError } = await supabase
+        .from('bookings')
+        .select('time_slot')
+        .eq('person_name', person.person_name)
+        .eq('date', date);
   
-    const bookedSlots = bookings.map(b => b.time_slot);
-    const available = timeSlots.filter(slot => !bookedSlots.includes(slot));
-
-    if (availability.days.includes(weekday)) {
-        return res.json({ available_slots: available });
+      if (bookingError) continue;
+  
+      const bookedSlots = bookings.map(b => b.time_slot);
+      const availableSlots = person.time_slots.filter(slot => !bookedSlots.includes(slot));
+  
+      if (availableSlots.length > 0) {
+        availablePeople.push({
+          id: person.id,
+          name: person.person_name,
+          available_slots: availableSlots
+        });
       }
-    else {
-        return res.json('Not available on weekends');
-      }
+    }
   
-    
+    return res.json({ available_people: availablePeople });
   });
   
   // POST /api/slots/book
@@ -154,14 +163,11 @@ const getWeekday = (dateString) => {
     
         receiptUrl = publicUrlData.publicUrl;
         }
-        console.log(receiptUrl)
     
         const updateData = {
         ...(transaction_id && { transaction_id }),
         ...(receiptUrl && { receipt_url: receiptUrl })
         };
-
-        console.log(updateData)
     
         const { error: updateError } = await supabase
         .from('bookings')
